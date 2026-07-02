@@ -30,11 +30,12 @@ io.on('connection', (socket) => {
         startGame();
     }
 
-    // Just update the server's central state; DO NOT broadcast here
     socket.on('playerMovement', (movementData) => {
         if (players[socket.id]) {
             players[socket.id].x = movementData.x;
             players[socket.id].y = movementData.y;
+            players[socket.id].direction = movementData.direction; 
+            players[socket.id].isMoving = movementData.isMoving;
         }
     });
 
@@ -56,12 +57,12 @@ io.on('connection', (socket) => {
     });
 });
 
-// --- THE FIX: FIXED TICK RATE NETWORK LOOP (30 Ticks per second) ---
+// FIXED TICK RATE NETWORK LOOP (30 Ticks per second)
 setInterval(() => {
     if (Object.keys(players).length > 0) {
         io.emit('stateUpdate', players);
     }
-}, 1000 / 30); // ~33ms
+}, 1000 / 30); 
 
 function startGame() {
     gameStarted = true;

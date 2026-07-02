@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>2D Hide and Seek MVP</title>
+    <title>2D Hide and Seek - Fixed Lag</title>
     <style>
         body { margin: 0; background: #222; display: flex; justify-content: center; align-items: center; height: 100vh; }
         canvas { background: #eee; border: 2px solid #fff; }
@@ -22,23 +22,41 @@
     let myId = null;
     const keys = { w: false, a: false, s: false, d: false };
     const speed = 4;
+    const LERP_FACTOR = 0.15; // Controls how smoothly other players glide (0.1 = smoother/slower, 0.3 = faster snap)
 
-    // Track network IDs
     socket.on('connect', () => { myId = socket.id; });
     socket.on('currentPlayers', (players) => { localPlayers = players; });
     socket.on('newPlayer', (data) => { localPlayers[data.id] = data.player; });
-    socket.on('playerMoved', (data) => { if(localPlayers[data.id]) { localPlayers[data.id].x = data.x; localPlayers[data.id].y = data.y; } });
+    
+    // SERVER RECEIVED MOVE packet: Do NOT snap positions instantly anymore!
+    // Instead, store the server's absolute target position for interpolation
+    socket.on('playerMoved', (data) => { 
+        if (localPlayers[data.id]) { 
+            if (data.id !== myId) {
+                // Store where the remote player is supposed to be heading
+                localPlayers[data.id].targetX = data.x;
+                localPlayers[data.id].targetY = data.y;
+            } else {
+                // Server reconciliation (Optional check: if server deviates wildly from prediction, update)
+                const distanceToServer = Math.hypot(localPlayers[myId].x - data.x, localPlayers[myId].y - data.y);
+                if (distanceToServer > 30) { 
+                    localPlayers[myId].x = data.x; 
+                    localPlayers[myId].y = data.y; 
+                }
+            }
+        } 
+    });
+
     socket.on('gameStarted', (players) => { localPlayers = players; alert("Game Started!"); });
     socket.on('playerTagged', (data) => { if(localPlayers[data.id]) { localPlayers[data.id].role = 'spectator'; localPlayers[data.id].color = 'gray'; } });
     socket.on('gameOver', (data) => { alert(`Game Over! Winner: ${data.winner}`); });
     socket.on('playerDisconnected', (id) => { delete localPlayers[id]; });
 
-    // Input listening
     window.addEventListener('keydown', (e) => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = true; });
     window.addEventListener('keyup', (e) => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = false; });
 
-    // Client Tick: Process Local Input & Collision Detection
     function gameLoop() {
+        // --- 1. CLIENT-SIDE PREDICTION (Your Own Player) ---
         if (myId && localPlayers[myId] && localPlayers[myId].role !== 'spectator') {
             let moved = false;
             let p = localPlayers[myId];
@@ -48,27 +66,37 @@
             if (keys.a && p.x > 15) { p.x -= speed; moved = true; }
             if (keys.d && p.x < canvas.width - 15) { p.x += speed; moved = true; }
 
+            // Instantly updates locally for you, then runs over the network to sync with everyone else
             if (moved) {
                 socket.emit('playerMovement', { x: p.x, y: p.y });
                 
-                // Seeker local hit registration check
                 if (p.role === 'seeker') {
                     Object.keys(localPlayers).forEach(id => {
                         if (id !== myId && localPlayers[id].role === 'hider') {
                             let dist = Math.hypot(p.x - localPlayers[id].x, p.y - localPlayers[id].y);
-                            if (dist < 30) { // Simple circle-circle overlap check (radius 15 each)
-                                socket.emit('playerTag', id);
-                            }
+                            if (dist < 30) socket.emit('playerTag', id);
                         }
                     });
                 }
             }
         }
 
-        // Render Frame
+        // --- 2. LINEAR INTERPOLATION (Smoothing Other Players) ---
+        Object.keys(localPlayers).forEach(id => {
+            if (id !== myId) {
+                let p = localPlayers[id];
+                // If we don't have a target layout yet, initialize it
+                if (p.targetX === undefined) { p.targetX = p.x; p.targetY = p.y; }
+                
+                // Blend current position toward the target position incrementally over frames
+                p.x += (p.targetX - p.x) * LERP_FACTOR;
+                p.y += (p.targetY - p.y) * LERP_FACTOR;
+            }
+        });
+
+        // --- 3. RENDER FRAME ---
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
-        // Draw all players
         Object.keys(localPlayers).forEach(id => {
             let p = localPlayers[id];
             ctx.beginPath();
@@ -77,10 +105,9 @@
             ctx.fill();
             ctx.closePath();
             
-            // Draw a tiny visual indicator for yourself
             if(id === myId) {
                 ctx.strokeStyle = '#000';
-                ctx.lineWidth = 2;
+                ctx.lineWidth = 3;
                 ctx.stroke();
             }
         });

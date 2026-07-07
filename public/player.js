@@ -74,8 +74,10 @@ class PlayerController {
 
             // Throttled Network Packets
             if (currentTime - this.lastEmitTime > this.EMIT_INTERVAL) {
+                // FIXED: Include isDisguised and propType in movement emit
                 socket.emit('playerMovement', { 
-                    x: p.x, y: p.y, direction: p.direction, isMoving: p.isMoving 
+                    x: p.x, y: p.y, direction: p.direction, isMoving: p.isMoving,
+                    isDisguised: p.isDisguised, propType: p.propType 
                 });
                 this.lastEmitTime = currentTime;
 
@@ -90,7 +92,11 @@ class PlayerController {
                 }
             }
         } else if (p.wasMovingLastFrame) {
-            socket.emit('playerMovement', { x: p.x, y: p.y, direction: p.direction, isMoving: false });
+            // FIXED: Include isDisguised and propType when stopping
+            socket.emit('playerMovement', { 
+                x: p.x, y: p.y, direction: p.direction, isMoving: false,
+                isDisguised: p.isDisguised, propType: p.propType
+            });
         }
         
         p.wasMovingLastFrame = p.isMoving;

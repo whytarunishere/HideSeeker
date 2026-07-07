@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>2D Hide and Seek - Dynamic Camera</title>
+    <title>2D Hide and Seek - Prop Hunt</title>
     <style>
         body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; }
         /* A subtle shadow makes the constrained canvas pop against the dark background */
@@ -19,27 +19,28 @@
 <script src="player.js"></script>
 <script src="sprite_renderer.js"></script>
 <script src="environment.js"></script>
-<script src="camera.js"></script> <!-- NEW: Import Camera Module -->
+<script src="camera.js"></script>
+<script src="ConvertingToProp.js"></script>
 
 <script>
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
     const socket = io();
 
-    // Initialize Modules
+    // 1. INSTANTIATE MANAGERS
+    const propManager = new ConvertingToProp('prop.png', 64, 64, 4);
     const playerController = new PlayerController(canvas.width, canvas.height);
     const spriteRenderer = new SpriteRenderer();
-    const environmentRenderer = new EnvironmentRenderer(); 
-    
-    // NEW: Initialize the Camera
-    // Passed arguments: Viewport Width, Viewport Height, Total Map Width, Total Map Height
+    const environmentRenderer = new EnvironmentRenderer();
     const camera = new Camera(canvas.width, canvas.height, 1000, 1000);
-    
+
     environmentRenderer.loadMap('maps/level1.json');
 
     let localPlayers = {};
     let myId = null;
     let animFrameCounter = 0;
+    let fKeyDebounce = false;
+    const keys = { w: false, a: false, s: false, d: false };
 
     socket.on('connect', () => { myId = socket.id; });
     socket.on('currentPlayers', (players) => { localPlayers = players; });
@@ -55,34 +56,67 @@
             if (id !== myId) {
                 localPlayers[id].targetX = serverPlayers[id].x;
                 localPlayers[id].targetY = serverPlayers[id].y;
-                localPlayers[id].direction = serverPlayers[id].direction; 
-                localPlayers[id].isMoving = serverPlayers[id].isMoving;  
+                localPlayers[id].direction = serverPlayers[id].direction;
+                localPlayers[id].isMoving = serverPlayers[id].isMoving;
                 localPlayers[id].role = serverPlayers[id].role;
                 localPlayers[id].color = serverPlayers[id].color;
+                
+                // Sync disguise state
+                localPlayers[id].isDisguised = serverPlayers[id].isDisguised;
+                localPlayers[id].propType = serverPlayers[id].propType;
             } else {
                 const distanceToServer = Math.hypot(localPlayers[myId].x - serverPlayers[id].x, localPlayers[myId].y - serverPlayers[id].y);
-                if (distanceToServer > 45) { 
-                    localPlayers[myId].x = serverPlayers[id].x; 
-                    localPlayers[myId].y = serverPlayers[id].y; 
+                if (distanceToServer > 45) {
+                    localPlayers[myId].x = serverPlayers[id].x;
+                    localPlayers[myId].y = serverPlayers[id].y;
                 }
             }
         });
     });
 
     socket.on('gameStarted', (players) => { localPlayers = players; alert("Game Started!"); });
-    socket.on('playerTagged', (data) => { if(localPlayers[data.id]) { localPlayers[data.id].role = 'spectator'; localPlayers[data.id].color = 'gray'; } });
+    socket.on('playerTagged', (data) => { if (localPlayers[data.id]) { localPlayers[data.id].role = 'spectator'; localPlayers[data.id].color = 'gray'; } });
     socket.on('gameOver', (data) => { alert(`Game Over! Winner: ${data.winner}`); });
     socket.on('playerDisconnected', (id) => { delete localPlayers[id]; });
 
+    // 2. DETECT KEY DOWN TRANSFORM ACTION
+    window.addEventListener('keydown', (e) => {
+        const key = e.key.toLowerCase();
+        if (keys.hasOwnProperty(key)) keys[key] = true;
+
+        if (key === 'f' && !fKeyDebounce) {
+            fKeyDebounce = true;
+
+            if (myId && localPlayers[myId]) {
+                let p = localPlayers[myId];
+
+                // Execute toggle logic via your new modular instance class
+                const didTransform = propManager.executeToggle(p);
+
+                if (didTransform) {
+                    // Instantly emit the updated data state package over the web socket
+                    socket.emit('playerMovement', {
+                        x: p.x, y: p.y, direction: p.direction, isMoving: p.isMoving,
+                        isDisguised: p.isDisguised, propType: p.propType
+                    });
+                }
+            }
+        }
+    });
+
+    window.addEventListener('keyup', (e) => {
+        const key = e.key.toLowerCase();
+        if (keys.hasOwnProperty(key)) keys[key] = false;
+        if (key === 'f') fKeyDebounce = false;
+    });
+
     // --- MAIN GAME LOOP ---
     function gameLoop(currentTime) {
-        animFrameCounter++; 
+        animFrameCounter++;
 
         // 1. Process local input and collisions
         if (myId && localPlayers[myId] && localPlayers[myId].role !== 'spectator') {
             playerController.updateLocalPlayer(localPlayers[myId], myId, localPlayers, socket, currentTime, environmentRenderer);
-            
-            // NEW: Update the camera's coordinates to track the local player's newly calculated position
             camera.update(localPlayers[myId]);
         }
 
@@ -90,20 +124,20 @@
         playerController.interpolateOtherPlayers(localPlayers, myId);
 
         // --- 3. RENDERING PHASE ---
-        
+
         // Step A: Clear the absolute canvas viewport BEFORE transforming it
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
+
         // Step B: Apply the camera offset context shift
         camera.apply(ctx);
 
-        // Step C: Render all game objects using their standard absolute coordinates
-        // Because the context is shifted, they will automatically draw relative to the camera
-        environmentRenderer.render(ctx, canvas.width, canvas.height); 
-        spriteRenderer.render(ctx, canvas, localPlayers, animFrameCounter);
+        // Step C: Render all game objects
+        environmentRenderer.render(ctx, canvas.width, canvas.height);
+        
+        // Pass the propManager directly into the SpriteRenderer so it handles drawing cleanly
+        spriteRenderer.render(ctx, canvas, localPlayers, animFrameCounter, propManager, myId);
 
         // Step D: Remove the context shift so the next frame starts fresh
-        // (This is also essential if you add fixed UI elements like scoreboards later)
         camera.clear(ctx);
 
         requestAnimationFrame(gameLoop);

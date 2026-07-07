@@ -20,7 +20,9 @@ io.on('connection', (socket) => {
         x: 400,
         y: 300,
         role: 'hider',
-        color: randomColor()
+        color: randomColor(),
+        isDisguised: false,
+        propType: 0
     };
 
     socket.emit('currentPlayers', players);
@@ -36,6 +38,8 @@ io.on('connection', (socket) => {
             players[socket.id].y = movementData.y;
             players[socket.id].direction = movementData.direction; 
             players[socket.id].isMoving = movementData.isMoving;
+            players[socket.id].isDisguised = movementData.isDisguised;
+            players[socket.id].propType = movementData.propType
         }
     });
 
